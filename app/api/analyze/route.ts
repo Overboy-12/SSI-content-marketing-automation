@@ -33,6 +33,27 @@ Step 4. 스크립트·스토리보드
 - 제품 핵심 장면
 - 클로징`;
 
+const ANALYSIS_MODEL = "gpt-5.4";
+
+function getOpenAIErrorMessage(status: number, apiError?: { code?: string; message?: string; type?: string }) {
+  const code = apiError?.code || apiError?.type || "";
+  const message = apiError?.message || "";
+
+  if (status === 401 || code === "invalid_api_key") {
+    return "OpenAI API 키가 올바르지 않습니다. API 키 페이지에서 새 키를 발급한 뒤 다시 입력해 주세요.";
+  }
+  if (status === 429 || code === "insufficient_quota") {
+    return "OpenAI API 잔액 또는 사용 한도를 확인해 주세요. 결제 직후라면 잠시 후 다시 시도해 주세요.";
+  }
+  if (code === "model_not_found" || /model.*(does not exist|access)/i.test(message)) {
+    return `현재 API 계정에서 분석 모델(${ANALYSIS_MODEL})을 사용할 수 없습니다. OpenAI 프로젝트의 모델 권한을 확인해 주세요.`;
+  }
+  if (status >= 500) {
+    return "OpenAI 서버 응답이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  return message || "OpenAI API 요청에 실패했습니다.";
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json() as {
@@ -56,7 +77,7 @@ export async function POST(request: Request) {
       method: "POST",
       headers: { "Authorization": `Bearer ${body.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-5.6",
+        model: ANALYSIS_MODEL,
         instructions: SYSTEM_PROMPT,
         input: [{ role: "user", content }],
         text: { format: { type: "json_schema", name: "reference_plan", strict: true, schema: { type: "object", additionalProperties: false, properties: { referenceSummary: { type: "string" }, result: { type: "string" }, error: { type: "string" } }, required: ["referenceSummary", "result", "error"] } } },
@@ -64,8 +85,8 @@ export async function POST(request: Request) {
     });
     const raw = await apiResponse.json() as Record<string, unknown>;
     if (!apiResponse.ok) {
-      const apiError = raw.error as { message?: string } | undefined;
-      return Response.json({ error: apiError?.message || "OpenAI API 요청에 실패했습니다." }, { status: apiResponse.status });
+      const apiError = raw.error as { code?: string; message?: string; type?: string } | undefined;
+      return Response.json({ error: getOpenAIErrorMessage(apiResponse.status, apiError) }, { status: apiResponse.status });
     }
     const output = raw.output as { type?: string; content?: { type?: string; text?: string }[] }[] | undefined;
     const text = output?.flatMap((item) => item.content || []).find((item) => item.type === "output_text")?.text;
